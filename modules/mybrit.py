@@ -1,0 +1,190 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+from torch.autograd import Variable
+from torch.nn.parameter import Parameter
+
+import math
+
+SEQ_LEN = 48
+
+
+def binary_cross_entropy_with_logits(input, target, weight=None, size_average=True, reduce=True):
+    if not (target.size() == input.size()):
+        raise ValueError("Target size ({}) must be the same as input size ({})".format(target.size(), input.size()))
+
+    max_val = (-input).clamp(min=0)
+    loss = input - input * target + max_val + ((-max_val).exp() + (-input - max_val).exp()).log()
+
+    if weight is not None:
+        loss = loss * weight
+
+    if not reduce:
+        return loss
+    elif size_average:
+        return loss.mean()
+    else:
+        return loss.sum()
+
+
+class FeatureRegression(nn.Module):
+    """
+    x_i的自相关性
+    """
+
+    def __init__(self, input_size):
+        super(FeatureRegression, self).__init__()
+        self.build(input_size)
+
+    def build(self, input_size):
+        self.W = Parameter(torch.Tensor(input_size, input_size))
+        self.b = Parameter(torch.Tensor(input_size))
+
+        m = torch.ones(input_size, input_size) - torch.eye(input_size, input_size)
+        self.register_buffer('m', m)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.W.size(0))
+        self.W.data.uniform_(-stdv, stdv)
+        if self.b is not None:
+            self.b.data.uniform_(-stdv, stdv)
+
+    def forward(self, x):
+        z_h = F.linear(x, self.W * Variable(self.m), self.b)
+        return z_h
+
+
+class TemporalDecay(nn.Module):
+    # Trainable decay
+    def __init__(self, input_size, output_size, diag=False):
+        super(TemporalDecay, self).__init__()
+        self.diag = diag
+
+        self.build(input_size, output_size)
+
+    def build(self, input_size, output_size):
+        self.W = Parameter(torch.Tensor(output_size, input_size))
+        self.b = Parameter(torch.Tensor(output_size))
+
+        if self.diag == True:
+            assert (input_size == output_size)
+            m = torch.eye(input_size, input_size)
+            self.register_buffer('m', m)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        stdv = 1. / math.sqrt(self.W.size(0))
+        self.W.data.uniform_(-stdv, stdv)
+        if self.b is not None:
+            self.b.data.uniform_(-stdv, stdv)
+
+    def forward(self, d):
+        if self.diag == True:
+            gamma = F.relu(F.linear(d, self.W * Variable(self.m), self.b))
+        else:
+            gamma = F.relu(F.linear(d, self.W, self.b))
+        gamma = torch.exp(-gamma)
+        return gamma
+
+
+class Model(nn.Module):
+    def __init__(self, input_size, rnn_hid_size, impute_weight, label_weight):
+        super(Model, self).__init__()
+        self.rnn_input_size = input_size * 2
+        self.input_size = input_size
+        self.rnn_hid_size = rnn_hid_size
+        self.impute_weight = impute_weight
+        self.label_weight = label_weight
+
+        self.build()
+
+    def build(self):
+        self.rnn_cell = nn.LSTMCell(self.rnn_input_size, self.rnn_hid_size)
+
+        self.temp_decay_h = TemporalDecay(input_size=self.input_size, output_size=self.rnn_hid_size, diag=False)
+        self.temp_decay_x = TemporalDecay(input_size=self.input_size, output_size=self.input_size, diag=True)
+
+        self.hist_reg = nn.Linear(self.rnn_hid_size, self.input_size)
+        self.feat_reg = FeatureRegression(self.input_size)  # Correlated Recurrent Imputation
+
+        self.weight_combine = nn.Linear(self.input_size * 2, self.input_size)
+
+        self.dropout = nn.Dropout(p=0.25)
+        self.out = nn.Linear(self.rnn_hid_size, 1)
+
+    def forward(self, data, direct):
+        # Original sequence with 24 time steps
+        values = data[direct]['values']
+        masks = data[direct]['masks']
+        deltas = data[direct]['deltas']
+        ys = data[direct]['sLabels']
+
+        h = Variable(torch.zeros((values.size()[0], self.rnn_hid_size)))
+        c = Variable(torch.zeros((values.size()[0], self.rnn_hid_size)))
+
+        if torch.cuda.is_available():
+            h, c = h.cuda(), c.cuda()
+
+        x_loss = 0.0
+        y_loss = 0.0
+
+        imputations = []
+        SEQ_LEN = values.size()[1]
+        for t in range(SEQ_LEN):
+            x = values[:, t, :]
+            m = masks[:, t, :]
+            d = deltas[:, t, :]
+            # y = ys[:, t, :]
+
+            gamma_h = self.temp_decay_h(d)
+            gamma_x = self.temp_decay_x(d)
+
+            h = h * gamma_h  # hidden state decay
+
+            x_h = self.hist_reg(h)  # replace missing values with history hidden state
+            x_loss += torch.sum(torch.abs(x - x_h) * m) / (torch.sum(m) + 1e-5)
+
+            x_c = m * x + (1 - m) * x_h  # complement vector
+
+            z_h = self.feat_reg(x_c)  # Correlated Recurrent Imputation
+            x_loss += torch.sum(torch.abs(x - z_h) * m) / (torch.sum(m) + 1e-5)
+
+            alpha = self.weight_combine(torch.cat([gamma_x, m], dim=1))  # cat
+
+            c_h = alpha * z_h + (1 - alpha) * x_h  # mix
+            x_loss += torch.sum(torch.abs(x - c_h) * m) / (torch.sum(m) + 1e-5)
+
+            c_c = m * x + (1 - m) * c_h  # Imputation
+
+            inputs = torch.cat([c_c, m], dim=1)
+
+            # inputs = torch.cat([inputs, y], dim=1)  # cat y
+
+            h, c = self.rnn_cell(inputs, (h, c))  # LSTMcell
+
+            imputations.append(c_c.unsqueeze(dim=1))
+
+        imputations = torch.cat(imputations, dim=1)
+        x_loss = x_loss / SEQ_LEN
+        return {'loss': x_loss * self.impute_weight,  # + y_loss * self.label_weight
+                # 'predictions': y_h,
+                'imputations': imputations,
+                # 'labels': labels,
+                # 'is_train': is_train,
+                # 'evals': evals,
+                # 'eval_masks': eval_masks,
+                'h_sub1': h}
+
+    def run_on_batch(self, data, optimizer, epoch=None):
+        ret = self(data, direct='forward')
+
+        if optimizer is not None:
+            optimizer.zero_grad()
+            ret['loss'].backward()
+            optimizer.step()
+
+        return ret
