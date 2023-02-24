@@ -7,9 +7,13 @@ from torch.autograd import Variable
 
 import pandas as pd
 
+import numpy as np
+import random
+import os
 
 def to_var(var):
     if torch.is_tensor(var):
+        torch.nan_to_num_(var)
         var = Variable(var)
         if torch.cuda.is_available():
             var = var.cuda()
@@ -37,7 +41,7 @@ def zero_var(sz):
     x = Variable(torch.zeros(sz))
     if torch.cuda.is_available():
         x = x.cuda()
-    return x
+    return
 
 
 def reverse_tensor(tensor_):
@@ -57,3 +61,46 @@ def reverse(ret):
         ret[key] = reverse_tensor(ret[key])
 
     return ret
+
+
+def seed_torch(seed=1029):
+    random.seed(seed)
+    os.environ['PYTHONHASHSEED'] = str(seed)    # 为了禁止hash随机化，使得实验可复现
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    # torch.cuda.manual_seed_all(seed) # if you are using multi-GPU.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+
+def getF1scores(target, pred, thresholds=None):
+    if thresholds.all() == None:
+        thresholds = np.sort(pred)[::-1]
+    f1scores = []
+    accscores = []
+    allTP = np.sum(target)
+    for eachthreshold in thresholds:
+        y_pred = (pred >= eachthreshold)
+        right = (y_pred == target)
+        TP = 0
+        for (eachp, eachr) in zip(y_pred, right):
+            if eachp and eachr:
+                TP += 1
+        predP = np.sum(y_pred)
+        if predP == 0:
+            P = 0
+        else:
+            P = TP / np.sum(y_pred)
+        R = TP / allTP
+        if (P + R) == 0:
+            temp_y_F1 = 0
+        else:
+            temp_y_F1 = 2.0 * P * R / (P + R)
+        acc = np.sum(right) / len(target)
+        # f1scores.append(sklearn.metrics.f1_score(target, y_pred))
+        f1scores.append(temp_y_F1)
+        accscores.append(acc)
+
+    return np.array(f1scores), np.array(accscores), thresholds
+

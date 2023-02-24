@@ -31,11 +31,11 @@ class Model(nn.Module):
     def forward(self, data):
         # a_tj_reverse = self.reverse_tensor(a_tj)
         # ret_b = self.attain(data, 'forward')
-        """
-        ys = data['forward']['sLabels']
-        data['forward']['values'] = torch.cat([data['forward']['values'], ys], dim=-1)
+
+        # ys = data['forward']['sLabels']
+        # data['forward']['values'] = torch.cat([data['forward']['values'], ys], dim=-1)
         data['backward']['values'] = reverse_tensor(data['forward']['values'])
-        """
+
         ret_b = self.attem_bw(data, 'backward')
         # data['backward'] = reverse(data['backward'])
         ret_f = self.attem_fw(data, 'forward')

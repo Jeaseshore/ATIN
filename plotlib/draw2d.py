@@ -174,8 +174,8 @@ def draw_lines(x, y, title, x_axis_names, y_axis_names, line_num=1, figsize=(10,
         """
     fig = plt.figure(figsize=figsize, dpi=dpi)
     plt.title(title)
-    plt.xlabel(x_axis_names)
-    plt.ylabel(y_axis_names)
+    plt.xlabel(x_axis_names, fontsize=20)
+    plt.ylabel(y_axis_names, fontsize=20)
     for i in range(line_num):
         temp_line_mean = 'Unknown'
         temp_color = 'k'
@@ -185,8 +185,9 @@ def draw_lines(x, y, title, x_axis_names, y_axis_names, line_num=1, figsize=(10,
             temp_color = color[i]
         plt.plot(x[i], y[i], label=temp_line_mean, c=temp_color)
         plt.legend(loc=loc)
-    # plt.xticks(x[i])
-    # plt.xticks(np.arange(0, len(x[0]), x_intervals))
+    plt.xticks(fontsize=20)
+    plt.yticks(fontsize=20)
+    plt.legend(fontsize=18)
     # plt.show()
     if is_save:
         fig.savefig(f'{save_as}.pdf', bbox_inches='tight')  # dpi=dpi, format='svg',

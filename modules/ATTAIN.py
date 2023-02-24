@@ -41,9 +41,10 @@ class Model(nn.Module):
 
     def forward(self, data):
         # a_tj_reverse = self.reverse_tensor(a_tj)
-        """
+
         data['forward']['sLabels'][:, -1] = 0
         data['backward']['sLabels'][:, -1] = 0
+        """
         ys = data['forward']['sLabels']
         data['forward']['values'] = torch.cat([data['forward']['values'], ys], dim=2)
         # data['backward']['values'] = reverse_tensor(data['forward']['values'])

@@ -51,7 +51,7 @@ class Model(nn.Module):
     def forward(self, data, direct):
         values = data[direct]['values']
         Deltas = data[direct]['Deltas']     # [batch_size, seq_length, 1]
-        ys = data[direct]['sLabels']
+        # ys = data[direct]['sLabels']
         SEQ_LEN = values.size()[1]
 
         h = Variable(torch.zeros((values.size()[0], self.rnn_hid_size)))
@@ -84,7 +84,7 @@ class Model(nn.Module):
             x = values[:, t, :]       # [batch_size, input_size]
             a = a_tj[:, t, :t]      # [batch_size, t]
             d = D[:, t, :t]         # [batch_size, t]
-            y = ys[:, t, :]
+            # y = ys[:, t, :]
             # g(∆t) = 1 / log(e + ∆t)
             # alpha = g * a
             # d = 1 / torch.log(1 + d)  # d > 0
@@ -94,7 +94,7 @@ class Model(nn.Module):
             c_mul_alpha = c_n[:, :t, :].clone() * alpha.unsqueeze(-1)   # [batch_size, t, hidden] * [batch_size, t, 1] = [batch_size, t, hidden]
                                                                         # c_n[:t].clone() is needed in loop
             C = torch.sum(c_mul_alpha, dim=-2)                          # [batch_size, t, hidden] -> [batch_size, hidden]
-            # inputs = torch.cat([x, y], dim=1)
+            # x = torch.cat([x, y], dim=1)
             h, c = self.rnn_cell(x, (h, C))
             h_n[:, t, :] = h
             c_n[:, t, :] = c
